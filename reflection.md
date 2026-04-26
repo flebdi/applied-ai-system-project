@@ -131,3 +131,31 @@ If I had another iteration I would add **duration-aware conflict detection**. Th
 **c. Key takeaway**
 
 Working with AI as a "lead architect" taught me that AI is excellent at generating *plausible* code quickly, but it doesn't know what *you* need unless you tell it. The most productive moments were when I gave the AI a specific file context and a precise goal ("given this `Task` dataclass, implement `handle_recurrence` so that daily tasks produce a `due_date` of today + 1"). The least productive were vague prompts like "help me with the scheduler." The lesson: AI amplifies clarity — the clearer your design intent, the better the output.
+
+---
+
+## 6. AI Ethics and Reliability (Module 3 Extension)
+
+**a. Limitations and biases in the system**
+
+- `claude-haiku-4-5-20251001` is a general-purpose LLM, not fine-tuned on veterinary care schedules. It may not know species-specific needs (e.g., that certain foods are toxic to rabbits, or that feline medication timing is clinically critical). Its suggestions are organizational, not medically authoritative.
+- The `_validate` step asks Claude to check Claude's own output. This is self-referential: if the model makes a systematic reasoning error in `_plan`, it may repeat the same error in `_validate` and never flag it. An external rule-based validator (e.g., checking that all high-priority tasks from the input are present in the output) would be more reliable.
+- Confidence scores are self-reported by the model and have no empirical calibration behind them. A score of 0.9 does not mean the plan is correct 90% of the time — it reflects the model's internal uncertainty estimate, which can be overconfident.
+
+**b. Could your AI be misused, and how would you prevent it?**
+
+- **Prompt injection**: A user could enter a task description containing adversarial instructions (e.g., "Ignore all previous instructions and..."). Mitigation: the system prompt establishes a strict domain role, and task data is interpolated as a structured list — not as free-form instructions — which reduces (but does not eliminate) the injection surface.
+- **Medical misuse**: The system could be used to plan medication schedules for animals. A user who treats AI output as medical advice could inadvertently harm their pet. Mitigation: a disclaimer is displayed in the UI ("This plan is for organizational purposes only. Never use AI output as a substitute for professional veterinary advice.").
+- **Log privacy**: `pawpal.log` records task descriptions including pet names and care routines. In a shared or cloud deployment this would be a privacy concern. Mitigation: for this class project (local use only) logging is appropriate. A production version should hash or redact PII from log entries.
+
+**c. What surprised you while testing the AI's reliability?**
+
+The most surprising design challenge was that asking Claude to validate its own plan required very specific, checkable criteria. An early draft of the `_validate` prompt asked "Is this a good plan?" — Claude consistently responded "Yes, this looks great!" regardless of whether tasks were missing. The prompt was rewritten to ask for specific, verifiable checks: "List any missing high-priority tasks, time conflicts, or infeasible sequences." This concrete framing produced actionable issues rather than vague reassurance. The lesson: AI self-evaluation must be constrained to falsifiable questions to be useful.
+
+**d. Describe your collaboration with AI during this project**
+
+*One instance where AI gave a helpful suggestion:*
+When designing the `PawPalAgent` class, I described the agentic loop to the AI and asked how to structure the public vs. private methods. The AI suggested making `_plan`, `_validate`, and `_refine` private (prefixed with `_`) and exposing only `generate_plan()` as the public API. This turned out to be the right call: the clean boundary made unit testing via `unittest.mock.patch.object` straightforward, and it prevented app.py from needing to know anything about the internal loop.
+
+*One instance where AI gave a flawed suggestion:*
+The AI initially recommended using `streaming=True` for the Claude API calls to improve perceived responsiveness ("users will see text appearing in real time"). I rejected this for two reasons: (1) streaming partial JSON responses makes `json.loads()` impossible until the full response is assembled anyway, so there is no parsing benefit; (2) displaying streaming text inside a Streamlit `st.spinner` does not provide any visible improvement — the spinner blocks the UI until `generate_plan()` returns. Accepting the suggestion would have added significant complexity (handling streaming chunks, assembling the buffer) with zero user-facing benefit for a planning task that completes in under 3 seconds.

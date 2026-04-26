@@ -7,6 +7,7 @@ import streamlit as st
 from datetime import date
 
 from pawpal_system import Owner, Pet, Task, Scheduler
+from agent import PawPalAgent, CarePlan
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -79,8 +80,8 @@ scheduler = Scheduler(owner)
 # Tab layout
 # ---------------------------------------------------------------------------
 
-tab_add, tab_schedule, tab_filter, tab_complete = st.tabs(
-    ["Add Task", "Today's Schedule", "Filter & Sort", "Mark Complete"]
+tab_add, tab_schedule, tab_filter, tab_complete, tab_ai = st.tabs(
+    ["Add Task", "Today's Schedule", "Filter & Sort", "Mark Complete", "AI Care Planner"]
 )
 
 # ── Tab 1: Add task ────────────────────────────────────────────────────────
@@ -238,3 +239,63 @@ with tab_complete:
                     f"Recurring task scheduled: '{next_task.description}' "
                     f"for {next_task.due_date} at {next_task.time}."
                 )
+
+# ── Tab 5: AI Care Planner ──────────────────────────────────────────────────
+with tab_ai:
+    st.subheader("AI-Generated Daily Care Plan")
+    st.caption(
+        "Uses Claude AI to create an optimized, self-validated care plan for today. "
+        "Requires an ANTHROPIC_API_KEY in your .env file."
+    )
+    st.caption(
+        ":warning: This plan is for organizational purposes only. "
+        "Never use AI output as a substitute for professional veterinary advice."
+    )
+
+    todays_tasks_ai = scheduler.get_todays_schedule()
+
+    if not todays_tasks_ai:
+        st.info("No tasks scheduled for today. Add tasks in the 'Add Task' tab first.")
+    else:
+        if st.button("Generate AI Plan for Today", key="btn_ai_plan"):
+            try:
+                with st.spinner("Generating plan... (up to 3 AI steps: plan, validate, refine)"):
+                    plan: CarePlan = PawPalAgent(owner).generate_plan()
+
+                for w in plan.warnings:
+                    st.warning(w)
+
+                if plan.steps:
+                    col_conf, col_iter = st.columns(2)
+                    col_conf.metric("Confidence", f"{plan.confidence:.0%}")
+                    col_iter.metric(
+                        "Iterations",
+                        plan.iterations,
+                        help="1 = plan accepted on first try. 2 = plan was refined after self-check.",
+                    )
+
+                    st.info(plan.reasoning_summary)
+
+                    st.table([
+                        {
+                            "Time": s.time,
+                            "Action": s.action,
+                            "Pet": s.pet_name,
+                            "Duration (min)": s.duration_minutes,
+                            "Priority": s.priority,
+                            "Reasoning": s.reasoning,
+                        }
+                        for s in plan.steps
+                    ])
+
+                    st.caption(
+                        f"Plan for {plan.generated_at} | "
+                        f"{'Clean plan — accepted on first try' if plan.iterations == 1 else 'Refined once after self-validation'}"
+                    )
+                else:
+                    st.warning("The AI returned an empty plan. Check your tasks and try again.")
+
+            except ValueError as e:
+                st.error(f"Configuration error: {e}")
+            except RuntimeError as e:
+                st.error(f"AI planning failed: {e}")
