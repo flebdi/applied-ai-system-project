@@ -6,7 +6,7 @@ Run with: python -m pytest tests/test_agent.py -v
 import json
 import os
 from datetime import date
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -71,9 +71,9 @@ def _mock_plan_dict():
 
 
 def _make_mock_response(content_text: str) -> MagicMock:
-    """Create a MagicMock that mimics anthropic.Message with content[0].text."""
+    """Create a MagicMock that mimics an OpenAI ChatCompletion response."""
     mock_resp = MagicMock()
-    mock_resp.content = [MagicMock(text=content_text)]
+    mock_resp.choices = [MagicMock(message=MagicMock(content=content_text))]
     return mock_resp
 
 
@@ -82,10 +82,10 @@ def _make_mock_response(content_text: str) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 def test_empty_schedule_returns_warning(owner_no_tasks, monkeypatch):
-    """When the owner has no tasks today, the guard returns a warning without calling Claude."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-000")
+    """When the owner has no tasks today, the guard returns a warning without calling the API."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-000")
 
-    with patch("agent.anthropic.Anthropic") as mock_anthropic_cls:
+    with patch("agent.openai.OpenAI") as mock_openai_cls:
         from agent import PawPalAgent
         agent = PawPalAgent(owner_no_tasks)
         plan = agent.generate_plan()
@@ -93,8 +93,7 @@ def test_empty_schedule_returns_warning(owner_no_tasks, monkeypatch):
     assert len(plan.warnings) > 0, "Expected a warning for empty schedule"
     assert plan.iterations == 0
     assert plan.steps == []
-    # No API call should have been made
-    mock_anthropic_cls.return_value.messages.create.assert_not_called()
+    mock_openai_cls.return_value.chat.completions.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -102,12 +101,13 @@ def test_empty_schedule_returns_warning(owner_no_tasks, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_missing_api_key_raises_error(owner_with_tasks, monkeypatch):
-    """PawPalAgent.__init__ must raise ValueError when ANTHROPIC_API_KEY is absent."""
+    """PawPalAgent.__init__ must raise ValueError when no API key is set."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    with patch("agent.anthropic.Anthropic"):
+    with patch("agent.openai.OpenAI"):
         from agent import PawPalAgent
-        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
             PawPalAgent(owner_with_tasks)
 
 
@@ -117,16 +117,15 @@ def test_missing_api_key_raises_error(owner_with_tasks, monkeypatch):
 
 def test_plan_step_count_matches_tasks(owner_with_tasks, monkeypatch):
     """The returned CarePlan should have one step per task in the mocked response."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-111")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-111")
 
     plan_dict = _mock_plan_dict()
     mock_resp = _make_mock_response(json.dumps(plan_dict))
 
-    with patch("agent.anthropic.Anthropic") as mock_anthropic_cls:
-        mock_anthropic_cls.return_value.messages.create.return_value = mock_resp
+    with patch("agent.openai.OpenAI") as mock_openai_cls:
+        mock_openai_cls.return_value.chat.completions.create.return_value = mock_resp
         from agent import PawPalAgent
         agent = PawPalAgent(owner_with_tasks)
-        # Mock _validate to return no issues so _refine is never called
         agent._validate = MagicMock(return_value=[])
         plan = agent.generate_plan()
 
@@ -141,13 +140,13 @@ def test_plan_step_count_matches_tasks(owner_with_tasks, monkeypatch):
 
 def test_confidence_below_threshold_adds_warning(owner_with_tasks, monkeypatch):
     """A confidence score below 0.6 must add a warning to CarePlan.warnings."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-222")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-222")
 
     low_conf_dict = {**_mock_plan_dict(), "confidence": 0.4}
     mock_resp = _make_mock_response(json.dumps(low_conf_dict))
 
-    with patch("agent.anthropic.Anthropic") as mock_anthropic_cls:
-        mock_anthropic_cls.return_value.messages.create.return_value = mock_resp
+    with patch("agent.openai.OpenAI") as mock_openai_cls:
+        mock_openai_cls.return_value.chat.completions.create.return_value = mock_resp
         from agent import PawPalAgent
         agent = PawPalAgent(owner_with_tasks)
         agent._validate = MagicMock(return_value=[])
@@ -164,17 +163,16 @@ def test_confidence_below_threshold_adds_warning(owner_with_tasks, monkeypatch):
 
 def test_validate_triggers_refine(owner_with_tasks, monkeypatch):
     """When _validate returns issues, _refine must be called once and iterations == 2."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-333")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-333")
 
     plan_dict = _mock_plan_dict()
     mock_resp = _make_mock_response(json.dumps(plan_dict))
 
-    with patch("agent.anthropic.Anthropic") as mock_anthropic_cls:
-        mock_anthropic_cls.return_value.messages.create.return_value = mock_resp
+    with patch("agent.openai.OpenAI") as mock_openai_cls:
+        mock_openai_cls.return_value.chat.completions.create.return_value = mock_resp
         from agent import PawPalAgent
         agent = PawPalAgent(owner_with_tasks)
 
-        # _plan returns the good dict; _validate finds an issue; _refine returns corrected dict
         agent._plan = MagicMock(return_value=plan_dict)
         agent._validate = MagicMock(return_value=["Missing high-priority task: Luna's medication"])
         agent._refine = MagicMock(return_value=plan_dict)

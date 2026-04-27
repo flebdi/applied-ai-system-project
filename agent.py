@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-import anthropic
+import openai
 from dotenv import load_dotenv
 
 from pawpal_system import Owner, Scheduler
@@ -100,15 +100,18 @@ class PawPalAgent:
 
     def __init__(self, owner: Owner) -> None:
         """Bind agent to an owner. Raises ValueError if API key is missing."""
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError(
-                "ANTHROPIC_API_KEY environment variable is not set. "
-                "Copy .env.example to .env and add your key."
+                "OPENROUTER_API_KEY environment variable is not set. "
+                "Copy .env.example to .env and add your OpenRouter key."
             )
         self.owner = owner
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = "claude-haiku-4-5-20251001"
+        self.client = openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        self.model = "anthropic/claude-3.5-haiku"
         logger.info("PawPalAgent initialized for owner: %s", owner.name)
 
     # ------------------------------------------------------------------
@@ -141,14 +144,16 @@ class PawPalAgent:
             return None
 
     def _call(self, user_prompt: str, max_tokens: int) -> str:
-        """Make a single Claude API call and return the text response."""
-        response = self.client.messages.create(
+        """Make a single API call via OpenRouter and return the text response."""
+        response = self.client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-        return response.content[0].text
+        return response.choices[0].message.content
 
     def _plan(self, context: str) -> dict:
         """Call Claude to generate an initial care plan as JSON."""
@@ -159,7 +164,7 @@ class PawPalAgent:
         )
         try:
             text = self._call(user_prompt, max_tokens=2000)
-        except anthropic.APIError as e:
+        except openai.APIError as e:
             logger.error("API error in _plan: %s", e)
             raise RuntimeError(f"Claude API error during planning: {e}") from e
 
@@ -169,7 +174,7 @@ class PawPalAgent:
             retry_prompt = user_prompt + "\n\nIMPORTANT: Respond with valid JSON only."
             try:
                 text2 = self._call(retry_prompt, max_tokens=2000)
-            except anthropic.APIError as e:
+            except openai.APIError as e:
                 logger.error("API error in _plan retry: %s", e)
                 raise RuntimeError(f"Claude API error during planning retry: {e}") from e
             result = self._parse_json(text2)
@@ -195,7 +200,7 @@ class PawPalAgent:
         )
         try:
             text = self._call(user_prompt, max_tokens=500)
-        except anthropic.APIError as e:
+        except openai.APIError as e:
             logger.warning("API error in _validate (non-fatal): %s", e)
             return []   # treat validation failure as "no issues"
 
@@ -219,7 +224,7 @@ class PawPalAgent:
         )
         try:
             text = self._call(user_prompt, max_tokens=2000)
-        except anthropic.APIError as e:
+        except openai.APIError as e:
             logger.error("API error in _refine: %s", e)
             raise RuntimeError(f"Claude API error during refinement: {e}") from e
 
@@ -229,7 +234,7 @@ class PawPalAgent:
             retry_prompt = user_prompt + "\n\nIMPORTANT: Respond with valid JSON only."
             try:
                 text2 = self._call(retry_prompt, max_tokens=2000)
-            except anthropic.APIError as e:
+            except openai.APIError as e:
                 logger.error("API error in _refine retry: %s", e)
                 raise RuntimeError(f"Claude API error during refinement retry: {e}") from e
             result = self._parse_json(text2)
